@@ -189,7 +189,7 @@ static int cliConnect(void) {
     static int fd = ANET_ERR;
 
     if (fd == ANET_ERR) {
-        fd = anetTcpConnect(err,config.hostip,config.hostport);
+        fd = anetTcpConnect(err,config.hostip,config.hostport,2);
         if (fd == ANET_ERR) {
             fprintf(stderr, "Could not connect to Redis at %s:%d: %s", config.hostip, config.hostport, err);
             return -1;
