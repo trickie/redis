@@ -391,6 +391,9 @@ struct redisServer {
     int masterport;
     redisClient *master;    /* client that is master for this slave */
     int replstate;
+	int repl_connect_timeout;
+	int repl_sync_snapshot_timeout;
+	int repl_sync_read_timeout;
     unsigned int maxclients;
     unsigned long long maxmemory;
     unsigned int blpop_blocked_clients;
@@ -1710,6 +1713,9 @@ static void initServerConfig() {
     server.masterport = 6379;
     server.master = NULL;
     server.replstate = REDIS_REPL_NONE;
+	server.repl_connect_timeout = 10;
+	server.repl_sync_snapshot_timeout = 3600;
+	server.repl_sync_read_timeout = 10;
 
     /* Double constants initialization */
     R_Zero = 0.0;
@@ -1907,7 +1913,22 @@ static void loadServerConfig(char *filename) {
             server.replstate = REDIS_REPL_CONNECT;
         } else if (!strcasecmp(argv[0],"masterauth") && argc == 2) {
         	server.masterauth = zstrdup(argv[1]);
-        } else if (!strcasecmp(argv[0],"glueoutputbuf") && argc == 2) {
+        } else if (!strcasecmp(argv[0],"repl-connect-timeout") && argc == 2) {
+            server.repl_connect_timeout = atoi(argv[1]);
+			if ( server.repl_connect_timeout < 0) {
+				err = "argument must be >= 0"; goto loaderr;
+			}
+		} else if (!strcasecmp(argv[0],"repl-sync-snapshot-timeout") && argc == 2) {
+            server.repl_sync_snapshot_timeout = atoi(argv[1]);
+			if ( server.repl_sync_snapshot_timeout < 0) {
+				err = "argument must be >= 0"; goto loaderr;
+			}
+		} else if (!strcasecmp(argv[0],"repl-sync-read-timeout") && argc == 2) {
+            server.repl_sync_read_timeout = atoi(argv[1]);
+			if ( server.repl_sync_read_timeout < 0) {
+				err = "argument must be >= 0"; goto loaderr;
+			}
+		} else if (!strcasecmp(argv[0],"glueoutputbuf") && argc == 2) {
             if ((server.glueoutputbuf = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
@@ -7960,7 +7981,7 @@ static void updateSlavesWaitingBgsave(int bgsaveerr) {
 static int syncWithMaster(void) {
     char buf[1024], tmpfile[256], authcmd[1024];
     long dumpsize;
-    int fd = anetTcpConnect(NULL,server.masterhost,server.masterport);
+    int fd = anetTcpConnect(NULL,server.masterhost,server.masterport, server.repl_connect_timeout);
     int dfd, maxtries = 5;
 
     if (fd == -1) {
@@ -7979,7 +8000,7 @@ static int syncWithMaster(void) {
             return REDIS_ERR;
     	}
         /* Read the AUTH result.  */
-        if (syncReadLine(fd,buf,1024,3600) == -1) {
+        if (syncReadLine(fd,buf,1024,server.repl_sync_read_timeout) == -1) {
             close(fd);
             redisLog(REDIS_WARNING,"I/O error reading auth result from MASTER: %s",
                 strerror(errno));
@@ -8000,7 +8021,7 @@ static int syncWithMaster(void) {
         return REDIS_ERR;
     }
     /* Read the bulk write count */
-    if (syncReadLine(fd,buf,1024,3600) == -1) {
+    if (syncReadLine(fd,buf,1024,server.repl_sync_snapshot_timeout) == -1) {
         close(fd);
         redisLog(REDIS_WARNING,"I/O error reading bulk count from MASTER: %s",
             strerror(errno));
@@ -8029,7 +8050,7 @@ static int syncWithMaster(void) {
     while(dumpsize) {
         int nread, nwritten;
 
-        nread = read(fd,buf,(dumpsize < 1024)?dumpsize:1024);
+        nread = syncRead(fd,buf,(dumpsize < 1024)?dumpsize:1024, server.repl_sync_read_timeout);
         if (nread == -1) {
             redisLog(REDIS_WARNING,"I/O error trying to sync with MASTER: %s",
                 strerror(errno));

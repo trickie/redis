@@ -73,6 +73,25 @@ int anetNonBlock(char *err, int fd)
     return ANET_OK;
 }
 
+int anetBlock(char *err, int fd)
+{
+    int flags;
+
+    /* Set the socket back to blocking.
+     * Note that fcntl(2) for F_GETFL and F_SETFL can't be
+     * interrupted by a signal. */
+    if ((flags = fcntl(fd, F_GETFL)) == -1) {
+        anetSetError(err, "fcntl(F_GETFL): %s\n", strerror(errno));
+        return ANET_ERR;
+    }
+    if (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) == -1) {
+        anetSetError(err, "fcntl(F_SETFL,~O_NONBLOCK): %s\n", strerror(errno));
+        return ANET_ERR;
+    }
+    return ANET_OK;
+}
+
+
 int anetTcpNoDelay(char *err, int fd)
 {
     int yes = 1;
@@ -125,7 +144,7 @@ int anetResolve(char *err, char *host, char *ipbuf)
 
 #define ANET_CONNECT_NONE 0
 #define ANET_CONNECT_NONBLOCK 1
-static int anetTcpGenericConnect(char *err, char *addr, int port, int flags)
+static int anetTcpGenericConnect(char *err, char *addr, int port, int flags, int timeout)
 {
     int s, on = 1;
     struct sockaddr_in sa;
@@ -151,30 +170,53 @@ static int anetTcpGenericConnect(char *err, char *addr, int port, int flags)
         }
         memcpy(&sa.sin_addr, he->h_addr, sizeof(struct in_addr));
     }
-    if (flags & ANET_CONNECT_NONBLOCK) {
-        if (anetNonBlock(err,s) != ANET_OK)
-            return ANET_ERR;
-    }
-    if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == -1) {
-        if (errno == EINPROGRESS &&
-            flags & ANET_CONNECT_NONBLOCK)
-            return s;
 
-        anetSetError(err, "connect: %s\n", strerror(errno));
-        close(s);
+	/* we need to make the socket non-blocking for a connection timeout */
+    if (anetNonBlock(err,s) != ANET_OK)
         return ANET_ERR;
+
+    if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == -1) {
+		if (errno == EINPROGRESS && (flags & ANET_CONNECT_NONBLOCK)) {
+			/* we will explicitly just passed the in progress socket back */
+            return s;
+		} 
+		else if (errno != EINPROGRESS) {
+			anetSetError(err, "connect: %s\n", strerror(errno));
+        	close(s);
+        	return ANET_ERR;
+		}
     }
+
+	if (!(flags | ANET_CONNECT_NONE)) {
+		/* we have a timeout then set back to blocking */
+		fd_set writeset;
+		struct timeval tv;
+		tv.tv_sec = timeout;
+		tv.tv_usec = timeout;
+		FD_ZERO(&writeset);
+		FD_SET(s, &writeset);
+		if (select(s + 1, NULL, &writeset, NULL, &tv) == -1) {
+			return ANET_ERR;
+		}
+		if (!FD_ISSET(s, &writeset)) {
+			errno = ETIMEDOUT;
+			return ANET_ERR;
+		}
+		if (anetBlock(err,s) != ANET_OK)
+			return ANET_ERR;
+	}
+	
     return s;
 }
 
-int anetTcpConnect(char *err, char *addr, int port)
+int anetTcpConnect(char *err, char *addr, int port, int timeout)
 {
-    return anetTcpGenericConnect(err,addr,port,ANET_CONNECT_NONE);
+    return anetTcpGenericConnect(err,addr,port,ANET_CONNECT_NONE, timeout);
 }
 
 int anetTcpNonBlockConnect(char *err, char *addr, int port)
 {
-    return anetTcpGenericConnect(err,addr,port,ANET_CONNECT_NONBLOCK);
+    return anetTcpGenericConnect(err,addr,port,ANET_CONNECT_NONBLOCK, -1);
 }
 
 /* Like read(2) but make sure 'count' is read before to return
