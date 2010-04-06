@@ -362,6 +362,7 @@ struct redisServer {
     int verbosity;
     int glueoutputbuf;
     int maxidletime;
+    int keepalive;
     int dbnum;
     int daemonize;
     int appendonly;
@@ -1671,6 +1672,7 @@ static void initServerConfig() {
     server.port = REDIS_SERVERPORT;
     server.verbosity = REDIS_VERBOSE;
     server.maxidletime = REDIS_MAXIDLETIME;
+    server.keepalive = 0;
     server.saveparams = NULL;
     server.logfile = NULL; /* NULL = log on standard output */
     server.bindaddr = NULL;
@@ -1847,6 +1849,11 @@ static void loadServerConfig(char *filename) {
             server.maxidletime = atoi(argv[1]);
             if (server.maxidletime < 0) {
                 err = "Invalid timeout value"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"keepalive") && argc == 2) {
+            server.keepalive = atoi(argv[1]);
+            if (server.keepalive < 0) {
+                err = "Invalid keepalive value"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"port") && argc == 2) {
             server.port = atoi(argv[1]);
@@ -2882,7 +2889,14 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
     redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-    if ((c = createClient(cfd)) == NULL) {
+    if (server.keepalive) {
+		if (anetTcpKeepAlive(server.neterr, cfd, server.keepalive) == AE_ERR) {
+			redisLog(REDIS_WARNING, "Setting keepalive: %s", server.neterr);
+			close(cfd);
+			return;
+		}
+	}
+	if ((c = createClient(cfd)) == NULL) {
         redisLog(REDIS_WARNING,"Error allocating resoures for the client");
         close(cfd); /* May be already closed, just ingore errors */
         return;
