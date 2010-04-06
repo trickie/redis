@@ -113,13 +113,38 @@ int anetSetSendBuffer(char *err, int fd, int buffsize)
     return ANET_OK;
 }
 
-int anetTcpKeepAlive(char *err, int fd)
+int anetTcpKeepAlive(char *err, int fd, int interval)
 {
-    int yes = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes)) == -1) {
+    int optval = 1;
+    int optlen = sizeof(optval);
+
+    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) == -1) {
         anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
         return ANET_ERR;
     }
+
+#ifdef __linux__
+	/* TODO: fix/set this for other OSs */
+	optval = interval;
+
+	if(setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &optval, optlen) < 0) {
+		anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
+        return ANET_ERR;
+	}
+
+	if(setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &optval, optlen) < 0) {
+		anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
+        return ANET_ERR;
+	}
+
+	/* fail after 1 failed keepalive packet */
+	optval = 1;
+	if(setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &optval, optlen) < 0) {
+		anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
+        return ANET_ERR;
+	}
+
+#endif
     return ANET_OK;
 }
 
