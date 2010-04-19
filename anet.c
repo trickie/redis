@@ -43,6 +43,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+
 #include "anet.h"
 
 static void anetSetError(char *err, const char *fmt, ...)
@@ -123,27 +124,27 @@ int anetTcpKeepAlive(char *err, int fd, int interval)
         return ANET_ERR;
     }
 
-#ifdef __linux__
-	/* TODO: fix/set this for other OSs */
+#ifdef TCP_KEEPIDLE
 	optval = interval;
 
 	if(setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &optval, optlen) < 0) {
 		anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
         return ANET_ERR;
 	}
-
+#endif
+#ifdef TCP_KEEPINTVL
 	if(setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &optval, optlen) < 0) {
 		anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
         return ANET_ERR;
 	}
-
+#endif
+#ifdef TCP_KEEPCNT
 	/* fail after 1 failed keepalive packet */
 	optval = 1;
 	if(setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &optval, optlen) < 0) {
 		anetSetError(err, "setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
         return ANET_ERR;
 	}
-
 #endif
     return ANET_OK;
 }
