@@ -191,45 +191,7 @@ proc createComplexDataset {r ops} {
 }
 
 proc datasetDigest r {
-    set keys [lsort [$r keys *]]
-    set digest {}
-    foreach k $keys {
-        set t [$r type $k]
-        switch $t {
-            {string} {
-                set aux [::sha1::sha1 -hex [$r get $k]]
-            } {list} {
-                if {[$r llen $k] == 0} {
-                    set aux {}
-                } else {
-                    set aux [::sha1::sha1 -hex [$r lrange $k 0 -1]]
-                }
-            } {set} {
-                if {[$r scard $k] == 0} {
-                    set aux {}
-                } else {
-                    set aux [::sha1::sha1 -hex [lsort [$r smembers $k]]]
-                }
-            } {zset} {
-                if {[$r zcard $k] == 0} {
-                    set aux {}
-                } else {
-                    set aux [::sha1::sha1 -hex [$r zrange $k 0 -1]]
-                }
-            } {hash} {
-                if {[$r hlen $k] == 0} {
-                    set aux {}
-                } else {
-                    set aux [::sha1::sha1 -hex [lsort [$r hgetall $k]]]
-                }
-            } default {
-                error "Type not supported: $t"
-            }
-        }
-        if {$aux eq {}} continue
-        set digest [::sha1::sha1 -hex [join [list $aux $digest $k] "\n"]]
-    }
-    return $digest
+    $r debug digest
 }
 
 proc main {} {
@@ -373,7 +335,7 @@ proc main {} {
 
     test {INCR fails against a key holding a list} {
         $r rpush mylist 1
-        catch {$r incr novar} err
+        catch {$r incr mylist} err
         $r rpop mylist
         format $err
     } {ERR*}
@@ -1898,11 +1860,15 @@ proc main {} {
         list [$r hincrby smallhash tmp 17179869184] [$r hincrby bighash tmp 17179869184]
     } {34359738368 34359738368}
 
-    test {HINCRBY against key with spaces (no integer encoded)} {
-        $r hset smallhash tmp "    11    "
-        $r hset bighash tmp "    11    "
-        list [$r hincrby smallhash tmp 1] [$r hincrby bighash tmp 1]
-    } {12 12}
+    test {HINCRBY fails against hash value with spaces} {
+        $r hset smallhash str "    11    "
+        $r hset bighash str "    11    "
+        catch {$r hincrby smallhash str 1} smallerr
+        catch {$r hincrby smallhash str 1} bigerr
+        set rv {}
+        lappend rv [string match "ERR*not an integer*" $smallerr]
+        lappend rv [string match "ERR*not an integer*" $bigerr]
+    } {1 1}
 
     # TODO:
     # Randomized test, small and big
@@ -2171,6 +2137,17 @@ proc main {} {
              [$r append foo 100] [$r get foo]
     } {3 bar 6 bar100}
 
+    test {APPEND basics, integer encoded values} {
+        set res {}
+        $r del foo
+        $r append foo 1
+        $r append foo 2
+        lappend res [$r get foo]
+        $r set foo 1
+        $r append foo 2
+        lappend res [$r get foo]
+    } {12 12}
+
     test {APPEND fuzzing} {
         set err {}
         foreach type {binary alpha compr} {
@@ -2183,6 +2160,42 @@ proc main {} {
             }
             if {$buf != [$r get x]} {
                 set err "Expected '$buf' found '[$r get x]'"
+                break
+            }
+        }
+        set _ $err
+    } {}
+
+    test {SUBSTR basics} {
+        set res {}
+        $r set foo "Hello World"
+        lappend res [$r substr foo 0 3]
+        lappend res [$r substr foo 0 -1]
+        lappend res [$r substr foo -4 -1]
+        lappend res [$r substr foo 5 3]
+        lappend res [$r substr foo 5 5000]
+        lappend res [$r substr foo -5000 10000]
+        set _ $res
+    } {Hell {Hello World} orld {} { World} {Hello World}}
+
+    test {SUBSTR against integer encoded values} {
+        $r set foo 123
+        $r substr foo 0 -2
+    } {12}
+
+    test {SUBSTR fuzzing} {
+        set err {}
+        for {set i 0} {$i < 1000} {incr i} {
+            set bin [randstring 0 1024 binary]
+            set _start [set start [randomInt 1500]]
+            set _end [set end [randomInt 1500]]
+            if {$_start < 0} {set _start "end-[abs($_start)-1]"}
+            if {$_end < 0} {set _end "end-[abs($_end)-1]"}
+            set s1 [string range $bin $_start $_end]
+            $r set bin $bin
+            set s2 [$r substr bin $start $end]
+            if {$s1 != $s2} {
+                set err "String mismatch"
                 break
             }
         }
